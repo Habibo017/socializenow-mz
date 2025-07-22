@@ -1,50 +1,58 @@
-import { Schema, models, model } from "mongoose"
+import { Schema, models, model, type Document } from "mongoose"
 
-// Defina a interface para o documento do usuário
+// Interface para o documento do usuário (baseada na sua estrutura real)
 export interface IUser extends Document {
-  username: string
-  handle: string // O @handle do usuário
+  _id: string
+  name: string // Campo 'name' ao invés de 'username'
   email: string
+  password: string
+  username: string // Handle do usuário (@username)
+  avatar?: string // URL do avatar no Cloudinary
   bio?: string
   followers?: number
   following?: number
-  avatarSrc?: string
-  backgroundSrc?: string
+  isVerified?: boolean // Selo de verificação
+  userEmailVerified?: boolean // Se o email foi verificado
   createdAt: Date
   updatedAt: Date
 }
 
-// Defina o esquema do usuário
+// Schema do usuário (correspondendo à sua estrutura)
 const UserSchema = new Schema<IUser>(
   {
-    username: {
+    name: {
       type: String,
-      required: [true, "Por favor, forneça um nome de usuário."],
-      unique: true,
+      required: [true, "Por favor, forneça um nome."],
       trim: true,
-      maxlength: [50, "O nome de usuário não pode ter mais de 50 caracteres."],
-    },
-    handle: {
-      type: String,
-      required: [true, "Por favor, forneça um handle."],
-      unique: true,
-      trim: true,
-      maxlength: [30, "O handle não pode ter mais de 30 caracteres."],
+      maxlength: [100, "O nome não pode ter mais de 100 caracteres."],
     },
     email: {
       type: String,
       required: [true, "Por favor, forneça um email."],
       unique: true,
       match: [/.+@.+\..+/, "Por favor, forneça um email válido."],
+      lowercase: true,
     },
     password: {
       type: String,
       required: true,
-      select: false, // Não retorna a senha por padrão em consultas
+      select: false,
+    },
+    username: {
+      type: String,
+      required: [true, "Por favor, forneça um username."],
+      unique: true,
+      trim: true,
+      maxlength: [30, "O username não pode ter mais de 30 caracteres."],
+    },
+    avatar: {
+      type: String,
+      default: "/placeholder.svg?height=96&width=96",
     },
     bio: {
       type: String,
       maxlength: [200, "A biografia não pode ter mais de 200 caracteres."],
+      default: "",
     },
     followers: {
       type: Number,
@@ -54,19 +62,19 @@ const UserSchema = new Schema<IUser>(
       type: Number,
       default: 0,
     },
-    avatarSrc: {
-      type: String,
+    isVerified: {
+      type: Boolean,
+      default: false,
     },
-    backgroundSrc: {
-      type: String,
+    userEmailVerified: {
+      type: Boolean,
+      default: false,
     },
   },
   {
-    timestamps: true, // Adiciona createdAt e updatedAt automaticamente
+    timestamps: true,
   },
 )
 
-// Exporta o modelo. Se o modelo já existe, reutiliza-o. Caso contrário, cria um novo.
 const User = models.User || model<IUser>("User", UserSchema)
-
 export default User
