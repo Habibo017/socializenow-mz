@@ -1,43 +1,18 @@
 import { type NextRequest, NextResponse } from "next/server"
-import jwt from "jsonwebtoken"
 import { ObjectId } from "mongodb"
 import clientPromise from "@/lib/mongodb"
-import { cookies } from "next/headers"
+import { verifyAuthToken } from "@/lib/auth" // Usando a função centralizada
 
-const JWT_SECRET = process.env.JWT_SECRET!
+const MENTION_REGEX = /@([a-zA-Z0-9_]+)/g // Regex para encontrar menções
 
-function verifyToken(request: NextRequest) {
-  // Primeiro tenta pegar do cookie (sistema atual)
-  const cookieStore = cookies()
-  let token = cookieStore.get("token")?.value
-
-  // Se não encontrar no cookie, tenta no header Authorization (compatibilidade)
-  if (!token) {
-    const authHeader = request.headers.get("authorization")
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7)
-    }
-  }
-
-  if (!token) {
-    return null
-  }
-
+export async function GET(request: NextRequest, { params }: { params: { postId: string } }) {
   try {
-    return jwt.verify(token, JWT_SECRET) as any
-  } catch (error) {
-    return null
-  }
-}
-
-export async function GET(request: NextRequest, { params }: { params: Promise<{ postId: string }> }) {
-  try {
-    const user = verifyToken(request)
+    const user = await verifyAuthToken()
     if (!user) {
       return NextResponse.json({ error: "Token inválido" }, { status: 401 })
     }
 
-    const { postId } = await params
+    const { postId } = params
 
     if (!postId || !ObjectId.isValid(postId)) {
       return NextResponse.json({ error: "ID do post inválido" }, { status: 400 })
@@ -71,7 +46,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
             createdAt: 1,
             "author._id": 1,
             "author.name": 1,
-            "author.username": 1, // Adicionado username
+            "author.username": 1,
             "author.avatar": 1,
           },
         },
@@ -83,19 +58,29 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       ])
       .toArray()
 
-    return NextResponse.json({ comments })
+    // Formata os IDs para string
+    const formattedComments = comments.map((comment) => ({
+      ...comment,
+      _id: comment._id.toString(),
+      author: {
+        ...comment.author,
+        _id: comment.author._id.toString(),
+        avatar: comment.author.avatar || "/placeholder.svg?height=96&width=96",
+      },
+    }))
+
+    return NextResponse.json({ comments: formattedComments })
   } catch (error) {
     console.error("Erro ao buscar comentários:", error)
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
   }
 }
 
-export async function POST(request: NextRequest, { params }: { params: Promise<{ postId: string }> }) {
+export async function POST(request: NextRequest, { params }: { params: { postId: string } }) {
   try {
-    const paramsData = await params
-    const postId = paramsData.postId
+    const { postId } = params
 
-    const user = verifyToken(request)
+    const user = await verifyAuthToken()
     if (!user) {
       return NextResponse.json({ error: "Token inválido" }, { status: 401 })
     }
@@ -108,19 +93,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const client = await clientPromise
     const db = client.db("socializenow")
-    const comments = db.collection("comments")
-    const posts = db.collection("posts")
-    const notifications = db.collection("notifications")
-    const users = db.collection("users")
+    const commentsCollection = db.collection("comments")
+    const postsCollection = db.collection("posts")
+    const notificationsCollection = db.collection("notifications")
+    const usersCollection = db.collection("users")
 
     // Verificar se o post existe
-    const post = await posts.findOne({ _id: new ObjectId(postId) })
+    const post = await postsCollection.findOne({ _id: new ObjectId(postId) })
     if (!post) {
       return NextResponse.json({ error: "Post não encontrado" }, { status: 404 })
     }
 
     // Buscar dados do usuário atual
-    const currentUser = await users.findOne({ _id: new ObjectId(user.userId) })
+    const currentUser = await usersCollection.findOne({ _id: new ObjectId(user.userId) })
     if (!currentUser) {
       return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 })
     }
@@ -131,24 +116,50 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       authorId: new ObjectId(user.userId),
       content: content.trim(),
       createdAt: new Date(),
+      likes: 0, // Adiciona campo de likes para comentários
     }
 
-    const result = await comments.insertOne(comment)
+    const result = await commentsCollection.insertOne(comment)
 
     // Incrementar contador de comentários no post
-    await posts.updateOne({ _id: new ObjectId(postId) }, { $inc: { commentsCount: 1 } })
+    await postsCollection.updateOne({ _id: new ObjectId(postId) }, { $inc: { commentsCount: 1 } })
 
     // Criar notificação para o autor do post (se não for o próprio usuário)
     if (post.authorId.toString() !== user.userId) {
-      await notifications.insertOne({
+      await notificationsCollection.insertOne({
         userId: post.authorId,
         fromUserId: new ObjectId(user.userId),
         type: "comment",
-        message: `${currentUser.name} comentou no seu post`,
+        content: `${currentUser.name} comentou no seu post: "${content.substring(0, 50)}..."`,
         postId: new ObjectId(postId),
-        read: false,
+        isRead: false,
         createdAt: new Date(),
       })
+    }
+
+    // Processar menções no comentário
+    const mentions = content.match(MENTION_REGEX)
+    if (mentions && mentions.length > 0) {
+      const uniqueMentions = Array.from(new Set(mentions.map((m) => m.substring(1)))) // Remove '@' e duplica
+      const mentionedUsers = await usersCollection
+        .find({ username: { $in: uniqueMentions } }, { projection: { _id: 1, username: 1 } })
+        .toArray()
+
+      for (const mentionedUser of mentionedUsers) {
+        // Evita notificar o próprio usuário se ele se mencionou
+        if (mentionedUser._id.toString() !== user.userId) {
+          await notificationsCollection.insertOne({
+            userId: mentionedUser._id,
+            fromUserId: new ObjectId(user.userId),
+            type: "mention",
+            content: `${currentUser.name} te mencionou em um comentário: "${content.substring(0, 50)}..."`,
+            postId: new ObjectId(postId),
+            commentId: result.insertedId,
+            isRead: false,
+            createdAt: new Date(),
+          })
+        }
+      }
     }
 
     return NextResponse.json({

@@ -45,7 +45,7 @@
     "cloudinary": "latest",
     "clsx": "^2.1.1",
     "cmdk": "latest",
-    "date-fns": "4.1.0",
+    "date-fns": "latest",
     "embla-carousel-react": "latest",
     "gcp-metadata": "latest",
     "input-otp": "latest",
