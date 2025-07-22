@@ -1,11 +1,8 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { useFormState, useFormStatus } from "react-dom"
-import { login } from "@/app/(auth)/actions"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -133,7 +130,7 @@ export function RegisterForm() {
 
       const data = await response.json()
       if (response.ok) {
-        localStorage.setItem("token", data.token)
+        // O token é definido como cookie HTTP-only pela API, não precisamos armazená-lo no cliente
         router.push("/feed")
       } else {
         setError(data.error || "Erro ao criar conta")
@@ -367,71 +364,6 @@ export function RegisterForm() {
           Já tem uma conta?{" "}
           <Link href="/login" className="underline text-mozambique-600 hover:text-mozambique-700 font-medium">
             Entrar
-          </Link>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-export function LoginForm() {
-  const [state, formAction] = useFormState(login, null)
-
-  function SubmitButton() {
-    const { pending } = useFormStatus()
-    return (
-      <Button
-        type="submit"
-        className="w-full bg-africanGreen-500 hover:bg-africanGreen-600 text-white font-semibold py-2 rounded-md"
-        disabled={pending}
-      >
-        {pending ? "Entrando..." : "Entrar"}
-      </Button>
-    )
-  }
-
-  return (
-    <Card className="mx-auto max-w-sm rounded-xl shadow-lg border-africanGreen-500 border-2">
-      <CardHeader className="space-y-1 text-center">
-        <CardTitle className="text-3xl font-bold text-africanGreen-700">Entrar</CardTitle>
-        <CardDescription className="text-gray-600">Bem-vindo de volta à SocializeNow!</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form action={formAction} className="grid gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="email">Email</Label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                id="email"
-                type="email"
-                name="email"
-                placeholder="seu@email.com"
-                required
-                className="pl-10 border-gray-300 focus:border-africanGreen-500 focus:ring-africanGreen-500"
-              />
-            </div>
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="password">Senha</Label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                id="password"
-                type="password"
-                name="password"
-                required
-                className="pl-10 border-gray-300 focus:border-africanGreen-500 focus:ring-africanGreen-500"
-              />
-            </div>
-          </div>
-          <SubmitButton />
-          {state?.error && <p className="text-red-500 text-sm text-center">{state.error}</p>}
-        </form>
-        <div className="mt-4 text-center text-sm text-gray-600">
-          Não tem uma conta?{" "}
-          <Link href="/register" className="underline text-africanGreen-600 hover:text-africanGreen-700">
-            Cadastre-se
           </Link>
         </div>
       </CardContent>

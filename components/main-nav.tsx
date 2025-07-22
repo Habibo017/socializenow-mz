@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils"
 import { Home, User, Bell, MessageCircle, Search } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { logout } from "@/app/actions/auth"
+import { Button } from "@/components/ui/button"
 
 export function MainNav() {
   const pathname = usePathname()
@@ -69,6 +71,12 @@ export function MainNav() {
             <AvatarImage src="/placeholder.svg?height=36&width=36" alt="User Avatar" />
             <AvatarFallback>US</AvatarFallback>
           </Avatar>
+          {/* Botão de Logout adicionado aqui */}
+          <form action={logout}>
+            <Button type="submit" variant="ghost" size="sm" className="text-gray-600 hover:text-africanRed-500">
+              Sair
+            </Button>
+          </form>
         </div>
       </div>
     </header>
