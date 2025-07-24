@@ -1,8 +1,12 @@
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import Image from "next/image"
+import { redirect } from "next/navigation"
 
 export default function HomePage() {
+  // Redireciona para a página de login por padrão
+  redirect("/login")
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-africanYellow-50 to-africanRed-50 p-4 text-center">
       <div className="relative z-10 flex flex-col items-center justify-center max-w-3xl mx-auto">

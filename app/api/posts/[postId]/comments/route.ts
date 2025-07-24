@@ -1,64 +1,67 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { ObjectId } from "mongodb"
-import clientPromise from "@/lib/mongodb"
-import { verifyAuthToken } from "@/lib/auth" // Usando a função centralizada
-
-const MENTION_REGEX = /@([a-zA-Z0-9_]+)/g // Regex para encontrar menções
+import dbConnect from "@/lib/dbConnect"
+import Comment from "@/models/Comment"
+import Post from "@/models/Post"
+import Notification from "@/models/Notification"
+import User from "@/models/User" // Import User model
+import { verifyAuthToken } from "@/lib/auth"
 
 export async function GET(request: NextRequest, { params }: { params: { postId: string } }) {
+  await dbConnect()
+  const { postId } = params
+
   try {
-    const user = await verifyAuthToken()
-    if (!user) {
-      return NextResponse.json({ error: "Token inválido" }, { status: 401 })
-    }
-
-    const { postId } = params
-
-    if (!postId || !ObjectId.isValid(postId)) {
-      return NextResponse.json({ error: "ID do post inválido" }, { status: 400 })
-    }
-
-    const client = await clientPromise
-    const db = client.db("socializenow")
-    const commentsCollection = db.collection("comments")
-
-    const comments = await commentsCollection
-      .aggregate([
-        {
-          $match: {
-            postId: new ObjectId(postId),
-          },
+    const comments = await Comment.aggregate([
+      { $match: { postId: new ObjectId(postId) } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "authorId",
+          foreignField: "_id",
+          as: "author",
         },
-        {
-          $lookup: {
-            from: "users",
-            localField: "authorId",
-            foreignField: "_id",
-            as: "author",
-          },
+      },
+      { $unwind: "$author" },
+      {
+        $lookup: {
+          from: "commentlikes", // Nome da coleção de likes de comentários
+          let: { commentId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$commentId", "$$commentId"] },
+                    { $eq: ["$userId", new ObjectId((await verifyAuthToken())?.userId)] },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "userLiked",
         },
-        {
-          $unwind: "$author",
+      },
+      {
+        $addFields: {
+          likedByUser: { $gt: [{ $size: "$userLiked" }, 0] },
         },
-        {
-          $project: {
-            content: 1,
-            createdAt: 1,
-            "author._id": 1,
-            "author.name": 1,
-            "author.username": 1,
-            "author.avatar": 1,
-          },
+      },
+      {
+        $project: {
+          content: 1,
+          createdAt: 1,
+          likes: 1,
+          likedByUser: 1,
+          "author._id": 1,
+          "author.name": 1,
+          "author.username": 1,
+          "author.avatar": 1,
         },
-        {
-          $sort: {
-            createdAt: 1,
-          },
-        },
-      ])
-      .toArray()
+      },
+      { $sort: { createdAt: 1 } },
+    ])
 
-    // Formata os IDs para string
     const formattedComments = comments.map((comment) => ({
       ...comment,
       _id: comment._id.toString(),
@@ -69,7 +72,7 @@ export async function GET(request: NextRequest, { params }: { params: { postId: 
       },
     }))
 
-    return NextResponse.json({ comments: formattedComments })
+    return NextResponse.json({ comments: formattedComments }, { status: 200 })
   } catch (error) {
     console.error("Erro ao buscar comentários:", error)
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
@@ -77,97 +80,84 @@ export async function GET(request: NextRequest, { params }: { params: { postId: 
 }
 
 export async function POST(request: NextRequest, { params }: { params: { postId: string } }) {
+  await dbConnect()
+  const { postId } = params
+
+  const user = await verifyAuthToken()
+  if (!user) {
+    return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
+  }
+
   try {
-    const { postId } = params
-
-    const user = await verifyAuthToken()
-    if (!user) {
-      return NextResponse.json({ error: "Token inválido" }, { status: 401 })
-    }
-
     const { content } = await request.json()
 
-    if (!content || content.trim().length === 0) {
+    if (!content || typeof content !== "string" || !content.trim()) {
       return NextResponse.json({ error: "Conteúdo do comentário é obrigatório" }, { status: 400 })
     }
 
-    const client = await clientPromise
-    const db = client.db("socializenow")
-    const commentsCollection = db.collection("comments")
-    const postsCollection = db.collection("posts")
-    const notificationsCollection = db.collection("notifications")
-    const usersCollection = db.collection("users")
-
-    // Verificar se o post existe
-    const post = await postsCollection.findOne({ _id: new ObjectId(postId) })
+    const post = await Post.findById(postId)
     if (!post) {
       return NextResponse.json({ error: "Post não encontrado" }, { status: 404 })
     }
 
-    // Buscar dados do usuário atual
-    const currentUser = await usersCollection.findOne({ _id: new ObjectId(user.userId) })
-    if (!currentUser) {
-      return NextResponse.json({ error: "Usuário não encontrado" }, { status: 404 })
-    }
-
-    // Criar comentário
-    const comment = {
+    const newComment = new Comment({
       postId: new ObjectId(postId),
       authorId: new ObjectId(user.userId),
       content: content.trim(),
-      createdAt: new Date(),
-      likes: 0, // Adiciona campo de likes para comentários
-    }
+      likes: 0,
+    })
 
-    const result = await commentsCollection.insertOne(comment)
+    await newComment.save()
 
-    // Incrementar contador de comentários no post
-    await postsCollection.updateOne({ _id: new ObjectId(postId) }, { $inc: { commentsCount: 1 } })
+    // Atualizar contagem de comentários no post
+    await Post.findByIdAndUpdate(postId, { $inc: { commentsCount: 1 } })
 
-    // Criar notificação para o autor do post (se não for o próprio usuário)
+    // Criar notificação para o autor do post (se não for o próprio comentarista)
     if (post.authorId.toString() !== user.userId) {
-      await notificationsCollection.insertOne({
+      const notification = new Notification({
         userId: post.authorId,
         fromUserId: new ObjectId(user.userId),
-        type: "comment",
-        content: `${currentUser.name} comentou no seu post: "${content.substring(0, 50)}..."`,
+        type: "comment_post",
+        content: content.trim(),
         postId: new ObjectId(postId),
-        isRead: false,
-        createdAt: new Date(),
+        commentId: newComment._id,
       })
+      await notification.save()
     }
 
-    // Processar menções no comentário
-    const mentions = content.match(MENTION_REGEX)
-    if (mentions && mentions.length > 0) {
-      const uniqueMentions = Array.from(new Set(mentions.map((m) => m.substring(1)))) // Remove '@' e duplica
-      const mentionedUsers = await usersCollection
-        .find({ username: { $in: uniqueMentions } }, { projection: { _id: 1, username: 1 } })
-        .toArray()
+    // Notificações de menção
+    const mentionRegex = /@(\w+)/g
+    let match
+    const mentionedUsernames = new Set<string>()
+    while ((match = mentionRegex.exec(content)) !== null) {
+      mentionedUsernames.add(match[1])
+    }
 
-      for (const mentionedUser of mentionedUsers) {
-        // Evita notificar o próprio usuário se ele se mencionou
-        if (mentionedUser._id.toString() !== user.userId) {
-          await notificationsCollection.insertOne({
-            userId: mentionedUser._id,
-            fromUserId: new ObjectId(user.userId),
-            type: "mention",
-            content: `${currentUser.name} te mencionou em um comentário: "${content.substring(0, 50)}..."`,
-            postId: new ObjectId(postId),
-            commentId: result.insertedId,
-            isRead: false,
-            createdAt: new Date(),
-          })
-        }
+    for (const mentionedUsername of mentionedUsernames) {
+      const mentionedUser = await User.findOne({ username: mentionedUsername }).select("_id").lean()
+      if (
+        mentionedUser &&
+        mentionedUser._id.toString() !== user.userId &&
+        mentionedUser._id.toString() !== post.authorId.toString()
+      ) {
+        const mentionNotification = new Notification({
+          userId: mentionedUser._id,
+          fromUserId: new ObjectId(user.userId),
+          type: "mention_comment",
+          content: content.trim(),
+          postId: new ObjectId(postId),
+          commentId: newComment._id,
+        })
+        await mentionNotification.save()
       }
     }
 
-    return NextResponse.json({
-      message: "Comentário adicionado com sucesso",
-      commentId: result.insertedId,
-    })
+    return NextResponse.json(
+      { message: "Comentário adicionado com sucesso", commentId: newComment._id },
+      { status: 201 },
+    )
   } catch (error) {
-    console.error("Add comment error:", error)
+    console.error("Erro ao adicionar comentário:", error)
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
   }
 }

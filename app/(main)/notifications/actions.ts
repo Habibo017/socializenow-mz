@@ -1,96 +1,86 @@
 "use server"
 
-import { revalidatePath } from "next/cache"
-import { verifyAuthToken } from "@/lib/auth"
+import { getAuthenticatedUser } from "@/lib/auth"
+import dbConnect from "@/lib/dbConnect"
+import Notification from "@/models/Notification"
 
-interface NotificationData {
-  _id: string
-  userId: string
-  fromUser: {
-    _id: string
-    name: string
-    username: string
-    avatar?: string
-  }
-  type: "like" | "comment" | "follow" | "mention" | "message"
-  postId?: string
-  commentId?: string
-  content: string
-  isRead: boolean
-  createdAt: string
-}
+export async function getNotifications() {
+  await dbConnect()
+  const user = await getAuthenticatedUser()
 
-export async function getNotifications(): Promise<NotificationData[]> {
-  const token = await verifyAuthToken()
-  if (!token) {
-    console.error("Usuário não autenticado para buscar notificações.")
-    return []
+  if (!user) {
+    console.error("Usuário não autenticado ao buscar notificações.")
+    return null
   }
 
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/notifications`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      next: {
-        revalidate: 0, // Sempre busca as notificações mais recentes
-      },
-    })
+    const notifications = await Notification.find({ recipient: user._id })
+      .populate("sender", "username name avatar")
+      .sort({ createdAt: -1 })
+      .lean()
 
-    if (!response.ok) {
-      console.error("Erro ao buscar notificações:", response.status, response.statusText)
-      return []
-    }
-
-    const data = await response.json()
-    return data.notifications.map((notif: any) => ({
-      _id: notif._id,
-      userId: notif.userId,
-      fromUser: {
-        _id: notif.fromUser._id,
-        name: notif.fromUser.name,
-        username: notif.fromUser.username,
-        avatar: notif.fromUser.avatar || "/placeholder.svg?height=96&width=96",
+    // Mapear para garantir que _id e sender._id sejam strings
+    const formattedNotifications = notifications.map((notif) => ({
+      ...notif,
+      _id: notif._id.toString(),
+      recipient: notif.recipient.toString(),
+      sender: {
+        ...notif.sender,
+        _id: notif.sender._id.toString(),
+        avatar: notif.sender.avatar || "/placeholder.svg?height=96&width=96",
       },
-      type: notif.type,
-      postId: notif.postId,
-      commentId: notif.commentId,
-      content: notif.content,
-      isRead: notif.isRead,
-      createdAt: notif.createdAt,
+      postId: notif.postId ? notif.postId.toString() : undefined,
+      commentId: notif.commentId ? notif.commentId.toString() : undefined,
+      createdAt: notif.createdAt.toISOString(),
     }))
+
+    return formattedNotifications
   } catch (error) {
     console.error("Erro ao buscar notificações:", error)
-    return []
+    return null
   }
 }
 
-export async function markNotificationAsRead(notificationId: string): Promise<boolean> {
-  const token = await verifyAuthToken()
-  if (!token) {
-    console.error("Usuário não autenticado para marcar notificação como lida.")
-    return false
+export async function getUnreadNotificationsCount(): Promise<number> {
+  await dbConnect()
+  const user = await getAuthenticatedUser()
+
+  if (!user) {
+    return 0
   }
 
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/notifications/${notificationId}/read`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
+    const count = await Notification.countDocuments({ recipient: user._id, isRead: false })
+    return count
+  } catch (error) {
+    console.error("Erro ao buscar contagem de notificações não lidas:", error)
+    return 0
+  }
+}
 
-    if (!response.ok) {
-      const errorData = await response.json()
-      console.error("Erro ao marcar notificação como lida:", errorData.error)
-      return false
+export async function markNotificationAsRead(notificationId: string) {
+  await dbConnect()
+  const user = await getAuthenticatedUser()
+
+  if (!user) {
+    console.error("Usuário não autenticado ao marcar notificação como lida.")
+    return { success: false, error: "Não autorizado" }
+  }
+
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      { _id: notificationId, recipient: user._id },
+      { $set: { isRead: true } },
+      { new: true },
+    )
+
+    if (!notification) {
+      return { success: false, error: "Notificação não encontrada ou não pertence ao usuário." }
     }
 
-    revalidatePath("/notifications") // Revalida a página de notificações
-    return true
+    return { success: true }
   } catch (error) {
-    console.error("Erro na requisição para marcar notificação como lida:", error)
-    return false
+    console.error("Erro ao marcar notificação como lida:", error)
+    return { success: false, error: "Erro interno do servidor" }
   }
 }

@@ -1,14 +1,14 @@
 import { redirect } from "next/navigation"
-import { getCurrentUser } from "@/lib/auth" // Importa a função para obter o usuário atual
+import { getAuthenticatedUser } from "@/lib/auth"
 
 export default async function MyProfilePage() {
-  const currentUser = await getCurrentUser()
+  const user = await getAuthenticatedUser()
 
-  if (!currentUser) {
-    // Se não houver usuário logado, redireciona para a página de login
+  if (!user) {
+    // Se não houver usuário autenticado, redireciona para o login
     redirect("/login")
   }
 
-  // Redireciona para o perfil do usuário logado usando o username (handle)
-  redirect(`/profile/${currentUser.username}`)
+  // Redireciona para o perfil do usuário logado
+  redirect(`/profile/${user.username}`)
 }

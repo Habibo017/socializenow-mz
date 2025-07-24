@@ -1,56 +1,57 @@
 import { cookies } from "next/headers"
-import jwt from "jsonwebtoken"
-import clientPromise from "@/lib/mongodb"
-import User, { type IUser } from "@/models/User"
+import { jwtVerify } from "jose"
+import User from "@/models/User"
+import dbConnect from "./dbConnect"
 
-const JWT_SECRET = process.env.JWT_SECRET!
+const JWT_SECRET = process.env.JWT_SECRET
 
-interface DecodedToken {
-  userId: string
-  email: string
-  username: string
-  iat: number
-  exp: number
+if (!JWT_SECRET) {
+  throw new Error("Please define the JWT_SECRET environment variable inside .env.local")
 }
 
-export async function verifyAuthToken(): Promise<DecodedToken | null> {
-  const cookieStore = cookies()
-  const token = cookieStore.get("token")?.value
+const secret = new TextEncoder().encode(JWT_SECRET)
+
+export async function verifyAuthToken(): Promise<{ userId: string; username: string } | null> {
+  const token = cookies().get("token")?.value
 
   if (!token) {
     return null
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as DecodedToken
-    return decoded
+    const { payload } = await jwtVerify(token, secret, {
+      algorithms: ["HS256"],
+    })
+    return { userId: payload.userId as string, username: payload.username as string }
   } catch (error) {
     console.error("Erro ao verificar token:", error)
     return null
   }
 }
 
-export async function getCurrentUser(): Promise<IUser | null> {
-  const decodedToken = await verifyAuthToken()
-  if (!decodedToken) {
+export async function getAuthenticatedUser() {
+  const tokenData = await verifyAuthToken()
+  if (!tokenData) {
     return null
   }
 
   try {
-    await clientPromise // Garante a conexão com o MongoDB
-    const user = await User.findById(decodedToken.userId).lean()
+    await dbConnect() // Garante a conexão com o MongoDB
+    const user = await User.findById(tokenData.userId).select("-password").lean()
+
     if (!user) {
       return null
     }
+
     // Converte ObjectId para string para serialização
     return {
       ...user,
       _id: user._id.toString(),
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
-    } as IUser
+    }
   } catch (error) {
-    console.error("Erro ao buscar usuário atual:", error)
+    console.error("Erro ao buscar usuário autenticado:", error)
     return null
   }
 }

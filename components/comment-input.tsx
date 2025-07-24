@@ -1,86 +1,46 @@
 "use client"
 
+import { AvatarFallback } from "@/components/ui/avatar"
+
+import { AvatarImage } from "@/components/ui/avatar"
+
+import { Avatar } from "@/components/ui/avatar"
+
 import type React from "react"
 
-import { useState, useRef, useEffect, useCallback } from "react"
-import { useFormStatus } from "react-dom"
-import { Textarea } from "@/components/ui/textarea"
+import { useState, useTransition, useRef, useEffect } from "react"
+import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Send } from "lucide-react"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { createComment } from "@/app/(main)/feed/actions"
 import { useDebounce } from "@/hooks/use-debounce"
+import { toast } from "@/components/ui/use-toast"
 
 interface CommentInputProps {
   postId: string
-  onCommentAdded: () => void
-  addCommentAction: (postId: string, content: string) => Promise<{ success: boolean; error?: string }>
+  onCommentPosted: () => void
 }
 
 interface UserSuggestion {
   _id: string
-  name: string
   username: string
+  name: string
   avatar?: string
 }
 
-export function CommentInput({ postId, onCommentAdded, addCommentAction }: CommentInputProps) {
+export function CommentInput({ postId, onCommentPosted }: CommentInputProps) {
   const [commentContent, setCommentContent] = useState("")
+  const [isPending, startTransition] = useTransition()
   const [suggestions, setSuggestions] = useState<UserSuggestion[]>([])
-  const [showSuggestions, setShowSuggestions] = useState(false)
-  const [mentionQuery, setMentionQuery] = useState("")
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const { pending } = useFormStatus()
-
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const debouncedMentionQuery = useDebounce(mentionQuery, 300)
-
-  const handleCommentSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!commentContent.trim()) return
-
-    const result = await addCommentAction(postId, commentContent)
-    if (result.success) {
-      setCommentContent("")
-      onCommentAdded()
-      setShowSuggestions(false)
-      setMentionQuery("")
-    } else {
-      console.error("Erro ao adicionar comentário:", result.error)
-      // Exibir erro para o usuário
-    }
-  }
-
-  const handleTextareaChange = useCallback(async (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value
-    setCommentContent(value)
-
-    const cursorPosition = e.target.selectionStart
-    const textBeforeCursor = value.substring(0, cursorPosition)
-    const lastAtIndex = textBeforeCursor.lastIndexOf("@")
-
-    if (lastAtIndex !== -1) {
-      const potentialMention = textBeforeCursor.substring(lastAtIndex + 1)
-      // Regex para verificar se o que vem depois do '@' é um nome de usuário válido (letras, números, underscores)
-      const mentionRegex = /^[a-zA-Z0-9_]+$/
-      if (potentialMention.length > 0 && mentionRegex.test(potentialMention)) {
-        setMentionQuery(potentialMention)
-        setShowSuggestions(true)
-      } else {
-        setMentionQuery("")
-        setShowSuggestions(false)
-      }
-    } else {
-      setMentionQuery("")
-      setShowSuggestions(false)
-    }
-  }, [])
 
   useEffect(() => {
     const fetchSuggestions = async () => {
-      if (debouncedMentionQuery.length > 0) {
+      if (debouncedMentionQuery && debouncedMentionQuery.length > 1) {
         try {
-          const response = await fetch(`/api/users/search?q=${debouncedMentionQuery}`)
+          const response = await fetch(`/api/users/search?query=${debouncedMentionQuery}`)
           if (response.ok) {
             const data = await response.json()
             setSuggestions(data.users)
@@ -95,85 +55,95 @@ export function CommentInput({ postId, onCommentAdded, addCommentAction }: Comme
         setSuggestions([])
       }
     }
-
     fetchSuggestions()
   }, [debouncedMentionQuery])
 
-  const handleSelectSuggestion = (username: string) => {
-    if (textareaRef.current) {
-      const currentContent = commentContent
-      const cursorPosition = textareaRef.current.selectionStart
-      const textBeforeCursor = currentContent.substring(0, cursorPosition)
-      const lastAtIndex = textBeforeCursor.lastIndexOf("@")
+  const handleCommentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    setCommentContent(value)
 
+    const mentionMatch = value.match(/@(\w+)$/)
+    if (mentionMatch) {
+      setMentionQuery(mentionMatch[1])
+    } else {
+      setMentionQuery(null)
+      setSuggestions([])
+    }
+  }
+
+  const handleSuggestionClick = (username: string) => {
+    if (commentContent) {
+      const lastAtIndex = commentContent.lastIndexOf("@")
       if (lastAtIndex !== -1) {
-        const newContent =
-          currentContent.substring(0, lastAtIndex) + `@${username} ` + currentContent.substring(cursorPosition)
+        const newContent = commentContent.substring(0, lastAtIndex) + `@${username} `
         setCommentContent(newContent)
-        setShowSuggestions(false)
-        setMentionQuery("")
-        // Foco e ajuste do cursor
-        setTimeout(() => {
-          if (textareaRef.current) {
-            textareaRef.current.focus()
-            textareaRef.current.setSelectionRange(lastAtIndex + username.length + 2, lastAtIndex + username.length + 2)
-          }
-        }, 0)
+        setMentionQuery(null)
+        setSuggestions([])
+        inputRef.current?.focus()
       }
     }
   }
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!commentContent.trim()) return
+
+    startTransition(async () => {
+      const result = await createComment(postId, commentContent)
+      if (result.success) {
+        setCommentContent("")
+        setMentionQuery(null)
+        setSuggestions([])
+        onCommentPosted()
+        toast({
+          title: "Comentário publicado!",
+          variant: "default",
+        })
+      } else {
+        toast({
+          title: "Erro ao comentar",
+          description: result.error || "Não foi possível publicar o comentário.",
+          variant: "destructive",
+        })
+      }
+    })
+  }
+
   return (
-    <form onSubmit={handleCommentSubmit} className="relative">
-      <Textarea
-        ref={textareaRef}
-        value={commentContent}
-        onChange={handleTextareaChange}
-        placeholder="Adicione um comentário..."
-        className="pr-12 min-h-[60px] resize-none border-gray-300 focus:border-mozambique-500 focus:ring-mozambique-500"
-        maxLength={300}
-      />
-      {showSuggestions && mentionQuery.length > 0 && (
-        <Popover open={showSuggestions} onOpenChange={setShowSuggestions}>
-          <PopoverTrigger asChild>
-            {/* Trigger invisível para ancorar o popover */}
-            <div className="absolute bottom-full left-0 w-0 h-0" />
-          </PopoverTrigger>
-          <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-            <Command>
-              <CommandInput placeholder="Buscar usuário..." value={mentionQuery} onValueChange={setMentionQuery} />
-              <CommandList>
-                <CommandEmpty>Nenhum usuário encontrado.</CommandEmpty>
-                <CommandGroup>
-                  {suggestions.map((user) => (
-                    <CommandItem
-                      key={user._id}
-                      onSelect={() => handleSelectSuggestion(user.username)}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
-                      <Avatar className="w-7 h-7">
-                        <AvatarImage src={user.avatar || "/placeholder.svg"} alt={`@${user.username}`} />
-                        <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
-                      </Avatar>
-                      <span>{user.name}</span>
-                      <span className="text-muted-foreground text-sm">@{user.username}</span>
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+    <div className="relative">
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <Input
+          ref={inputRef}
+          placeholder="Adicione um comentário..."
+          value={commentContent}
+          onChange={handleCommentChange}
+          disabled={isPending}
+          className="flex-1 rounded-full pr-10"
+        />
+        <Button type="submit" size="icon" className="rounded-full" disabled={isPending}>
+          <Send className="h-4 w-4" />
+        </Button>
+      </form>
+      {suggestions.length > 0 && mentionQuery && (
+        <div className="absolute bottom-full left-0 mb-2 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
+          {suggestions.map((user) => (
+            <div
+              key={user._id}
+              className="flex items-center gap-2 p-2 hover:bg-gray-100 cursor-pointer"
+              onClick={() => handleSuggestionClick(user.username)}
+            >
+              <Avatar className="w-8 h-8">
+                <AvatarImage src={user.avatar || "/placeholder.svg?height=96&width=96"} alt={user.username} />
+                <AvatarFallback>{user.username.substring(0, 2).toUpperCase()}</AvatarFallback>
+              </Avatar>
+              <div>
+                <p className="font-semibold text-sm">{user.name}</p>
+                <p className="text-xs text-gray-500">@{user.username}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
-      <Button
-        type="submit"
-        size="icon"
-        className="absolute bottom-2 right-2 bg-mozambique-500 hover:bg-mozambique-600 text-white"
-        disabled={pending || !commentContent.trim()}
-      >
-        <Send className="w-4 h-4" />
-        <span className="sr-only">Enviar Comentário</span>
-      </Button>
-    </form>
+    </div>
   )
 }

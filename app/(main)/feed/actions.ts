@@ -1,221 +1,273 @@
 "use server"
 
+import dbConnect from "@/lib/dbConnect"
+import Post from "@/models/Post"
+import Like from "@/models/Like"
+import Comment from "@/models/Comment"
+import CommentLike from "@/models/CommentLike"
+import Notification from "@/models/Notification"
+import User from "@/models/User" // Import User model
+import { getAuthenticatedUser } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
-import { formatDistanceToNowStrict } from "date-fns"
-import { ptBR } from "date-fns/locale"
-import { verifyAuthToken } from "@/lib/auth" // Importa a função de verificação de token
 
-interface PostData {
-  _id: string
-  username: string
-  handle: string
-  avatarSrc: string
-  timeAgo: string
-  content: string
-  imageUrl?: string
-  likes: number
-  commentsCount: number
-  likedByUser: boolean
-}
-
-interface CommentData {
-  _id: string
-  content: string
-  createdAt: string
-  author: {
-    _id: string
-    name: string
-    username: string
-    avatar?: string
+export async function createPost(formData: FormData) {
+  const user = await getAuthenticatedUser()
+  if (!user) {
+    throw new Error("Usuário não autenticado.")
   }
-}
 
-export async function createPost(prevState: any, formData: FormData) {
-  const token = await verifyAuthToken()
-  if (!token) {
-    return { error: "Você precisa estar logado para criar um post." }
-  }
+  await dbConnect()
 
   const content = formData.get("content") as string
-  const imageUrl = formData.get("imageUrl") as string
+  const imageUrl = formData.get("imageUrl") as string // Optional image URL
 
-  if (!content.trim() && !imageUrl.trim()) {
-    return { error: "O conteúdo ou a URL da imagem é obrigatório." }
+  if (!content && !imageUrl) {
+    throw new Error("O post não pode estar vazio.")
   }
 
   try {
-    const postData: { content: string; imageUrl?: string } = { content }
-    if (imageUrl) {
-      postData.imageUrl = imageUrl
-    }
-
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/posts`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`, // Envia o token no header
-      },
-      body: JSON.stringify(postData),
+    const newPost = await Post.create({
+      content,
+      imageUrl: imageUrl || undefined,
+      author: user._id,
     })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      return { error: errorData.error || "Erro ao criar post." }
-    }
-
-    revalidatePath("/feed") // Revalida o cache do feed para mostrar o novo post
-    return { success: true, message: "Post criado com sucesso!" }
+    revalidatePath("/feed")
+    return JSON.parse(JSON.stringify(newPost))
   } catch (error) {
     console.error("Erro ao criar post:", error)
-    return { error: "Erro interno do servidor." }
+    throw new Error("Não foi possível criar o post.")
   }
 }
 
-export async function getFeedPosts(): Promise<PostData[]> {
-  const token = await verifyAuthToken()
-  if (!token) {
-    // Se não houver token, retorna um feed vazio ou público limitado
-    console.warn("Nenhum token de autenticação encontrado. Retornando posts públicos ou vazios.")
-    return []
-  }
+export async function getFeedPosts() {
+  const user = await getAuthenticatedUser()
+  await dbConnect()
 
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/posts`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`, // Envia o token no header
-      },
-      next: {
-        tags: ["posts"], // Tag para revalidação específica
-      },
-    })
+    const posts = await Post.find({}).populate("author", "username name avatar").sort({ createdAt: -1 }).lean()
 
-    if (!response.ok) {
-      console.error("Erro ao buscar posts do feed:", response.status, response.statusText)
-      return []
-    }
-
-    const data = await response.json()
-
-    return data.posts.map((post: any) => ({
-      _id: post._id,
-      username: post.author.name,
-      handle: post.author.username,
-      avatarSrc: post.author.avatar || "/placeholder.svg?height=96&width=96",
-      timeAgo: formatDistanceToNowStrict(new Date(post.createdAt), {
-        addSuffix: true,
-        locale: ptBR,
+    const postsWithLikeStatus = await Promise.all(
+      posts.map(async (post) => {
+        const likesCount = await Like.countDocuments({ post: post._id })
+        const commentsCount = await Comment.countDocuments({ post: post._id })
+        const isLikedByUser = user ? await Like.exists({ post: post._id, user: user._id }) : false
+        return {
+          ...JSON.parse(JSON.stringify(post)),
+          likesCount,
+          commentsCount,
+          isLikedByUser: !!isLikedByUser,
+        }
       }),
-      content: post.content,
-      imageUrl: post.image, // 'image' é o campo no seu modelo de Post
-      likes: post.likes,
-      commentsCount: post.commentsCount,
-      likedByUser: post.likedByUser,
-    }))
+    )
+    return postsWithLikeStatus
   } catch (error) {
-    console.error("Erro ao buscar posts do feed:", error)
-    return []
+    console.error("Erro ao buscar posts:", error)
+    throw new Error("Não foi possível carregar o feed.")
   }
 }
 
-export async function toggleLikePost(postId: string): Promise<{ liked: boolean; likes: number } | null> {
-  const token = await verifyAuthToken()
-  if (!token) {
-    console.error("Usuário não autenticado para curtir/descurtir.")
-    return null
+export async function likePost(postId: string, isLiking: boolean) {
+  const user = await getAuthenticatedUser()
+  if (!user) {
+    throw new Error("Usuário não autenticado.")
   }
 
+  await dbConnect()
+
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/posts/${postId}/like`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      console.error("Erro ao curtir/descurtir post:", errorData.error)
-      return null
+    if (isLiking) {
+      await Like.findOneAndUpdate(
+        { post: postId, user: user._id },
+        { post: postId, user: user._id },
+        { upsert: true, new: true },
+      )
+      // Create notification for the post author
+      const post = await Post.findById(postId).lean()
+      if (post && post.author.toString() !== user._id.toString()) {
+        await Notification.findOneAndUpdate(
+          { recipient: post.author, type: "like", "metadata.postId": postId, "metadata.likerId": user._id },
+          {
+            recipient: post.author,
+            sender: user._id,
+            type: "like",
+            message: `${user.name} curtiu seu post.`,
+            read: false,
+            metadata: { postId: postId, likerId: user._id },
+          },
+          { upsert: true, new: true },
+        )
+      }
+    } else {
+      await Like.deleteOne({ post: postId, user: user._id })
+      // Remove notification if unliked
+      const post = await Post.findById(postId).lean()
+      if (post && post.author.toString() !== user._id.toString()) {
+        await Notification.deleteOne({
+          recipient: post.author,
+          type: "like",
+          "metadata.postId": postId,
+          "metadata.likerId": user._id,
+        })
+      }
     }
-
-    const data = await response.json()
-    revalidatePath("/feed") // Revalida o feed para atualizar o estado do like
-    revalidatePath(`/profile/${data.authorHandle}`) // Revalida o perfil do autor do post
-    return { liked: data.liked, likes: data.likes }
+    const likesCount = await Like.countDocuments({ post: postId })
+    revalidatePath("/feed")
+    revalidatePath(`/profile/${user.username}`) // Revalidate user's profile if they liked their own post
+    return likesCount
   } catch (error) {
-    console.error("Erro na requisição de curtir/descurtir:", error)
-    return null
+    console.error("Erro ao curtir/descurtir post:", error)
+    throw new Error("Não foi possível processar a curtida.")
   }
 }
 
-export async function addComment(postId: string, content: string): Promise<{ success: boolean; error?: string }> {
-  const token = await verifyAuthToken()
-  if (!token) {
-    return { success: false, error: "Você precisa estar logado para comentar." }
+export async function createComment(postId: string, content: string) {
+  const user = await getAuthenticatedUser()
+  if (!user) {
+    throw new Error("Usuário não autenticado.")
+  }
+
+  await dbConnect()
+
+  if (!content.trim()) {
+    throw new Error("O comentário não pode estar vazio.")
   }
 
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/posts/${postId}/comments`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ content }),
+    const newComment = await Comment.create({
+      post: postId,
+      author: user._id,
+      content,
     })
 
-    if (!response.ok) {
-      const errorData = await response.json()
-      return { success: false, error: errorData.error || "Erro ao adicionar comentário." }
+    // Create notification for the post author
+    const post = await Post.findById(postId).lean()
+    if (post && post.author.toString() !== user._id.toString()) {
+      await Notification.create({
+        recipient: post.author,
+        sender: user._id,
+        type: "comment",
+        message: `${user.name} comentou no seu post.`,
+        read: false,
+        metadata: { postId: postId, commentId: newComment._id },
+      })
     }
 
-    revalidatePath("/feed") // Revalida o feed para atualizar a contagem de comentários
-    revalidatePath(`/profile/${token.username}`) // Revalida o perfil do usuário que comentou
-    return { success: true }
+    // Create notifications for mentioned users
+    const mentionRegex = /@([a-zA-Z0-9_]+)/g
+    let match
+    const mentionedUsernames = new Set<string>()
+    while ((match = mentionRegex.exec(content)) !== null) {
+      mentionedUsernames.add(match[1])
+    }
+
+    if (mentionedUsernames.size > 0) {
+      const mentionedUsers = await User.find({ username: { $in: Array.from(mentionedUsernames) } }).lean()
+      for (const mentionedUser of mentionedUsers) {
+        if (mentionedUser._id.toString() !== user._id.toString()) {
+          // Don't notify self
+          await Notification.create({
+            recipient: mentionedUser._id,
+            sender: user._id,
+            type: "mention",
+            message: `${user.name} te mencionou em um comentário.`,
+            read: false,
+            metadata: { postId: postId, commentId: newComment._id, mentionerId: user._id },
+          })
+        }
+      }
+    }
+
+    revalidatePath("/feed")
+    revalidatePath(`/posts/${postId}`) // If you have a single post page
+    return JSON.parse(JSON.stringify(newComment))
   } catch (error) {
-    console.error("Erro ao adicionar comentário:", error)
-    return { success: false, error: "Erro interno do servidor." }
+    console.error("Erro ao criar comentário:", error)
+    throw new Error("Não foi possível criar o comentário.")
   }
 }
 
-export async function getCommentsForPost(postId: string): Promise<CommentData[]> {
-  const token = await verifyAuthToken()
-  if (!token) {
-    console.error("Usuário não autenticado para ver comentários.")
-    return []
-  }
+export async function getCommentsForPost(postId: string) {
+  const user = await getAuthenticatedUser()
+  await dbConnect()
 
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/posts/${postId}/comments`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      next: {
-        revalidate: 0, // Sempre busca os comentários mais recentes
-      },
-    })
+    const comments = await Comment.find({ post: postId })
+      .populate("author", "username name avatar")
+      .sort({ createdAt: 1 })
+      .lean()
 
-    if (!response.ok) {
-      console.error("Erro ao buscar comentários:", response.status, response.statusText)
-      return []
-    }
-
-    const data = await response.json()
-    return data.comments.map((comment: any) => ({
-      _id: comment._id,
-      content: comment.content,
-      createdAt: comment.createdAt,
-      author: {
-        _id: comment.author._id,
-        name: comment.author.name,
-        username: comment.author.username,
-        avatar: comment.author.avatar || "/placeholder.svg?height=96&width=96",
-      },
-    }))
+    const commentsWithLikeStatus = await Promise.all(
+      comments.map(async (comment) => {
+        const likesCount = await CommentLike.countDocuments({ comment: comment._id })
+        const isLikedByUser = user ? await CommentLike.exists({ comment: comment._id, user: user._id }) : false
+        return {
+          ...JSON.parse(JSON.stringify(comment)),
+          likesCount,
+          isLikedByUser: !!isLikedByUser,
+        }
+      }),
+    )
+    return commentsWithLikeStatus
   } catch (error) {
     console.error("Erro ao buscar comentários:", error)
-    return []
+    throw new Error("Não foi possível carregar os comentários.")
+  }
+}
+
+export async function likeComment(commentId: string, isLiking: boolean) {
+  const user = await getAuthenticatedUser()
+  if (!user) {
+    throw new Error("Usuário não autenticado.")
+  }
+
+  await dbConnect()
+
+  try {
+    if (isLiking) {
+      await CommentLike.findOneAndUpdate(
+        { comment: commentId, user: user._id },
+        { comment: commentId, user: user._id },
+        { upsert: true, new: true },
+      )
+      // Create notification for the comment author
+      const comment = await Comment.findById(commentId).lean()
+      if (comment && comment.author.toString() !== user._id.toString()) {
+        await Notification.findOneAndUpdate(
+          {
+            recipient: comment.author,
+            type: "comment_like",
+            "metadata.commentId": commentId,
+            "metadata.likerId": user._id,
+          },
+          {
+            recipient: comment.author,
+            sender: user._id,
+            type: "comment_like",
+            message: `${user.name} curtiu seu comentário.`,
+            read: false,
+            metadata: { commentId: commentId, likerId: user._id },
+          },
+          { upsert: true, new: true },
+        )
+      }
+    } else {
+      await CommentLike.deleteOne({ comment: commentId, user: user._id })
+      // Remove notification if unliked
+      const comment = await Comment.findById(commentId).lean()
+      if (comment && comment.author.toString() !== user._id.toString()) {
+        await Notification.deleteOne({
+          recipient: comment.author,
+          type: "comment_like",
+          "metadata.commentId": commentId,
+          "metadata.likerId": user._id,
+        })
+      }
+    }
+    const likesCount = await CommentLike.countDocuments({ comment: commentId })
+    revalidatePath("/feed") // Revalidate feed to update comment likes
+    return likesCount
+  } catch (error) {
+    console.error("Erro ao curtir/descurtir comentário:", error)
+    throw new Error("Não foi possível processar a curtida do comentário.")
   }
 }

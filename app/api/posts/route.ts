@@ -1,39 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server"
-import jwt from "jsonwebtoken"
 import { ObjectId } from "mongodb"
 import clientPromise from "@/lib/mongodb"
 import cloudinary from "@/lib/cloudinary"
-import { cookies } from "next/headers"
-
-const JWT_SECRET = process.env.JWT_SECRET!
-
-function verifyToken(request: NextRequest) {
-  // Primeiro tenta pegar do cookie (sistema atual)
-  const cookieStore = cookies()
-  let token = cookieStore.get("token")?.value
-
-  // Se não encontrar no cookie, tenta no header Authorization (compatibilidade)
-  if (!token) {
-    const authHeader = request.headers.get("authorization")
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.substring(7)
-    }
-  }
-
-  if (!token) {
-    return null
-  }
-
-  try {
-    return jwt.verify(token, JWT_SECRET) as any
-  } catch {
-    return null
-  }
-}
+import { verifyAuthToken } from "@/lib/auth" // Usar a nova função de verificação
 
 export async function GET(request: NextRequest) {
   try {
-    const user = verifyToken(request)
+    const user = await verifyAuthToken() // Verifica o token
     if (!user) {
       return NextResponse.json({ error: "Token inválido" }, { status: 401 })
     }
@@ -96,7 +69,7 @@ export async function GET(request: NextRequest) {
             commentsCount: 1,
             "author._id": 1,
             "author.name": 1,
-            "author.username": 1, // Adicionado username
+            "author.username": 1,
             "author.email": 1,
             "author.avatar": 1,
             "author.isVerified": 1,
@@ -117,7 +90,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = verifyToken(request)
+    const user = await verifyAuthToken() // Verifica o token
     if (!user) {
       return NextResponse.json({ error: "Token inválido" }, { status: 401 })
     }

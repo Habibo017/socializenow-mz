@@ -1,29 +1,25 @@
-import { Schema, models, model, type Document, type Types } from "mongoose"
+import mongoose, { Schema, type Document, type Types } from "mongoose"
 
 export interface ICommentLike extends Document {
-  _id: string
-  commentId: Types.ObjectId
   userId: Types.ObjectId
+  commentId: Types.ObjectId
   createdAt: Date
 }
 
-const CommentLikeSchema = new Schema<ICommentLike>(
+const CommentLikeSchema: Schema = new Schema(
   {
-    commentId: {
-      type: Schema.Types.ObjectId,
-      ref: "Comment",
-      required: true,
-    },
-    userId: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    commentId: { type: Schema.Types.ObjectId, ref: "Comment", required: true },
+    createdAt: { type: Date, default: Date.now },
   },
   {
     timestamps: true,
   },
 )
 
-const CommentLike = models.CommentLike || model<ICommentLike>("CommentLike", CommentLikeSchema)
+// Garante que um usuário só possa curtir um comentário uma vez
+CommentLikeSchema.index({ userId: 1, commentId: 1 }, { unique: true })
+
+const CommentLike = mongoose.models.CommentLike || mongoose.model<ICommentLike>("CommentLike", CommentLikeSchema)
+
 export default CommentLike

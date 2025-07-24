@@ -1,39 +1,30 @@
-import { type NextRequest, NextResponse } from "next/server"
-import { ObjectId } from "mongodb"
-import clientPromise from "@/lib/mongodb"
-import { verifyAuthToken } from "@/lib/auth"
+import { NextResponse } from "next/server"
+import dbConnect from "@/lib/dbConnect"
+import Notification from "@/models/Notification"
+import { getAuthenticatedUser } from "@/lib/auth"
 
-export async function PUT(request: NextRequest, { params }: { params: { notificationId: string } }) {
+export async function POST(req: Request, { params }: { params: { notificationId: string } }) {
+  await dbConnect()
+  const user = await getAuthenticatedUser()
+
+  if (!user) {
+    return NextResponse.json({ error: "Não autorizado" }, { status: 401 })
+  }
+
+  const { notificationId } = params
+
   try {
-    const user = await verifyAuthToken()
-    if (!user) {
-      return NextResponse.json({ error: "Token inválido" }, { status: 401 })
-    }
-
-    const { notificationId } = params
-
-    if (!ObjectId.isValid(notificationId)) {
-      return NextResponse.json({ error: "ID da notificação inválido" }, { status: 400 })
-    }
-
-    const client = await clientPromise
-    const db = client.db("socializenow")
-    const notificationsCollection = db.collection("notifications")
-
-    const notificationObjectId = new ObjectId(notificationId)
-    const userId = new ObjectId(user.userId)
-
-    // Atualiza a notificação, garantindo que o usuário logado é o destinatário
-    const result = await notificationsCollection.updateOne(
-      { _id: notificationObjectId, userId: userId },
+    const notification = await Notification.findOneAndUpdate(
+      { _id: notificationId, recipient: user._id },
       { $set: { isRead: true } },
+      { new: true },
     )
 
-    if (result.matchedCount === 0) {
+    if (!notification) {
       return NextResponse.json({ error: "Notificação não encontrada ou não pertence ao usuário" }, { status: 404 })
     }
 
-    return NextResponse.json({ message: "Notificação marcada como lida" })
+    return NextResponse.json({ message: "Notificação marcada como lida", notification }, { status: 200 })
   } catch (error) {
     console.error("Erro ao marcar notificação como lida:", error)
     return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })

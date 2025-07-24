@@ -1,56 +1,50 @@
-import dbConnect from "@/lib/dbConnect"
-import User from "@/models/User"
+import { NextResponse } from "next/server"
+import { cookies } from "next/headers"
 import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
-import { cookies } from "next/headers"
-import { NextResponse } from "next/server"
+import dbConnect from "@/lib/dbConnect"
+import User from "@/models/User"
 
-const JWT_SECRET = process.env.JWT_SECRET
+const JWT_SECRET = process.env.JWT_SECRET!
 
-if (!JWT_SECRET) {
-  throw new Error("Please define the JWT_SECRET environment variable inside .env.local")
-}
-
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   await dbConnect()
 
-  const { email, password } = await req.json()
-
-  if (!email || !password) {
-    return NextResponse.json({ error: "Email e senha são obrigatórios." }, { status: 400 })
-  }
-
   try {
-    const user = await User.findOne({ email }).select("+password").lean()
+    const { email, password } = await request.json()
+
+    if (!email || !password) {
+      return NextResponse.json({ error: "Email e senha são obrigatórios" }, { status: 400 })
+    }
+
+    const user = await User.findOne({ email })
 
     if (!user) {
-      return NextResponse.json({ error: "Credenciais inválidas." }, { status: 401 })
+      return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
     }
 
-    // Compara a senha fornecida com o hash armazenado
-    const isPasswordValid = await bcrypt.compare(password, user.password)
+    const isMatch = await bcrypt.compare(password, user.password)
 
-    if (!isPasswordValid) {
-      return NextResponse.json({ error: "Credenciais inválidas." }, { status: 401 })
+    if (!isMatch) {
+      return NextResponse.json({ error: "Credenciais inválidas" }, { status: 401 })
     }
 
-    // Gera o token JWT
-    const token = jwt.sign({ userId: user._id.toString(), username: user.username, name: user.name }, JWT_SECRET, {
-      expiresIn: "7d",
+    const token = jwt.sign({ userId: user._id.toString(), username: user.username, email: user.email }, JWT_SECRET, {
+      expiresIn: "1h",
     })
 
-    // Define o token como um cookie HTTP-only
+    // Define o cookie httpOnly
     cookies().set("token", token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 7, // 7 dias
-      path: "/",
-      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production", // Use secure em produção
+      maxAge: 60 * 60, // 1 hora
+      path: "/", // Disponível em toda a aplicação
+      sameSite: "lax", // Proteção CSRF
     })
 
-    return NextResponse.json({ message: "Login bem-sucedido!" }, { status: 200 })
+    return NextResponse.json({ message: "Login bem-sucedido", redirectTo: "/feed" }, { status: 200 })
   } catch (error) {
     console.error("Erro no login:", error)
-    return NextResponse.json({ error: "Ocorreu um erro ao tentar fazer login." }, { status: 500 })
+    return NextResponse.json({ error: "Erro interno do servidor" }, { status: 500 })
   }
 }
