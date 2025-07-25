@@ -1,63 +1,32 @@
-import { getAuthenticatedUser } from "@/lib/auth"
-import { getUserProfileAndPosts } from "./actions"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Button } from "@/components/ui/button"
-import { Card, CardHeader, CardTitle } from "@/components/ui/card"
-import { FeedPost } from "@/components/feed-post"
+import UserProfile from "@/components/user-profile"
+import { getUserProfile } from "./actions"
 import { notFound } from "next/navigation"
 
 export default async function UserProfilePage({ params }: { params: { username: string } }) {
-  const { username } = params
-  const currentUser = await getAuthenticatedUser()
-  const { user, posts } = await getUserProfileAndPosts(username)
+  const user = await getUserProfile(params.username)
 
   if (!user) {
-    notFound()
+    notFound() // Exibe a página 404 se o usuário não for encontrado
   }
 
-  const isCurrentUser = currentUser?._id === user._id
+  // Adapta os dados do usuário do MongoDB para as props do UserProfile
+  const profileData = {
+    username: user.username,
+    handle: user.handle,
+    bio: user.bio || "Sem biografia.", // Garante que bio não seja undefined
+    followers: user.followers ?? 0, // Garante que seja um número
+    following: user.following ?? 0, // Garante que seja um número
+    avatarSrc: user.avatarSrc || "/placeholder.svg?height=96&width=96",
+    backgroundSrc: user.backgroundSrc || "/placeholder.svg?height=160&width=400",
+  }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-2xl">
-      <Card className="mb-6">
-        <CardHeader className="flex flex-col items-center text-center">
-          <Avatar className="w-24 h-24 mb-4">
-            <AvatarImage src={user.avatar || "/placeholder.svg?height=96&width=96"} alt={`${user.username}'s avatar`} />
-            <AvatarFallback>{user.username.substring(0, 2).toUpperCase()}</AvatarFallback>
-          </Avatar>
-          <CardTitle className="text-3xl font-bold">{user.name}</CardTitle>
-          <p className="text-gray-500 text-lg">@{user.username}</p>
-          {user.bio && <p className="mt-2 text-gray-700">{user.bio}</p>}
-          <div className="flex gap-4 mt-4">
-            <div className="text-center">
-              <span className="font-bold">{user.followers}</span>
-              <p className="text-sm text-gray-500">Seguidores</p>
-            </div>
-            <div className="text-center">
-              <span className="font-bold">{user.following}</span>
-              <p className="text-sm text-gray-500">Seguindo</p>
-            </div>
-            <div className="text-center">
-              <span className="font-bold">{user.postsCount}</span>
-              <p className="text-sm text-gray-500">Posts</p>
-            </div>
-          </div>
-          {!isCurrentUser && <Button className="mt-6">Seguir</Button>}
-          {isCurrentUser && (
-            <Button variant="outline" className="mt-6 bg-transparent">
-              Editar Perfil
-            </Button>
-          )}
-        </CardHeader>
-      </Card>
-
-      <h2 className="text-2xl font-bold mb-4">Posts de @{user.username}</h2>
-      <div className="space-y-6">
-        {posts && posts.length > 0 ? (
-          posts.map((post) => <FeedPost key={post._id} post={post} currentUserId={currentUser?._id} />)
-        ) : (
-          <p className="text-center text-gray-500">Nenhum post encontrado para este usuário.</p>
-        )}
+    <div className="flex flex-col items-center justify-center p-4">
+      <UserProfile {...profileData} />
+      {/* Aqui você pode adicionar uma seção para os posts do usuário */}
+      <div className="mt-8 w-full max-w-md text-center">
+        <h2 className="text-2xl font-bold text-gray-800 mb-4">Posts de @{user.handle}</h2>
+        <p className="text-gray-600">Nenhum post ainda. (Em breve, os posts aparecerão aqui!)</p>
       </div>
     </div>
   )

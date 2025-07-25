@@ -1,137 +1,83 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useTransition, useRef } from "react"
-import { Card, CardContent, CardFooter } from "@/components/ui/card"
-import { Textarea } from "@/components/ui/textarea"
-import { Button } from "@/components/ui/button"
-import { ImageIcon, Send } from "lucide-react"
+import { useState } from "react"
+import { useFormState, useFormStatus } from "react-dom"
 import { createPost } from "@/app/(main)/feed/actions"
-import { toast } from "@/components/ui/use-toast"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ImageIcon, Send } from "lucide-react"
 
 export function CreatePostForm() {
-  const [content, setContent] = useState("")
-  const [image, setImage] = useState<File | null>(null)
-  const [isPending, startTransition] = useTransition()
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [state, formAction] = useFormState(createPost, null)
+  const [showImageInput, setShowImageInput] = useState(false)
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0]
-      if (!file.type.startsWith("image/")) {
-        toast({
-          title: "Erro de imagem",
-          description: "Apenas arquivos de imagem são permitidos.",
-          variant: "destructive",
-        })
-        setImage(null)
-        return
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        // 5MB limit
-        toast({
-          title: "Erro de imagem",
-          description: "A imagem deve ter no máximo 5MB.",
-          variant: "destructive",
-        })
-        setImage(null)
-        return
-      }
-      setImage(file)
-    }
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!content.trim() && !image) {
-      toast({
-        title: "Erro",
-        description: "O conteúdo ou uma imagem é obrigatório para o post.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    startTransition(async () => {
-      const formData = new FormData()
-      formData.append("content", content.trim())
-      if (image) {
-        formData.append("image", image)
-      }
-
-      const result = await createPost(formData)
-      if (result.success) {
-        setContent("")
-        setImage(null)
-        if (fileInputRef.current) {
-          fileInputRef.current.value = "" // Clear file input
-        }
-        toast({
-          title: "Post criado!",
-          description: "Seu post foi publicado com sucesso.",
-          variant: "default",
-        })
-        // Optionally, trigger a revalidation of the feed here if needed
-      } else {
-        toast({
-          title: "Erro ao criar post",
-          description: result.error || "Não foi possível publicar o post.",
-          variant: "destructive",
-        })
-      }
-    })
+  function SubmitButton() {
+    const { pending } = useFormStatus()
+    return (
+      <Button type="submit" className="bg-mozambique-500 hover:bg-mozambique-600 text-white" disabled={pending}>
+        {pending ? (
+          "Publicando..."
+        ) : (
+          <>
+            <Send className="w-4 h-4 mr-2" />
+            Publicar
+          </>
+        )}
+      </Button>
+    )
   }
 
   return (
-    <Card className="w-full">
-      <CardContent className="p-4">
-        <h2 className="text-lg font-semibold mb-3">O que está acontecendo?</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Textarea
-            placeholder="Compartilhe suas ideias com a comunidade SocializeNow..."
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            rows={3}
-            disabled={isPending}
-          />
-          {image && (
-            <div className="relative w-full h-32 rounded-lg overflow-hidden border border-gray-200">
-              <img
-                src={URL.createObjectURL(image) || "/placeholder.svg"}
-                alt="Preview"
-                className="w-full h-full object-cover"
+    <Card className="border-mozambique-200">
+      <CardHeader>
+        <CardTitle className="text-lg text-mozambique-700">O que está acontecendo?</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form action={formAction} className="space-y-4">
+          <div>
+            <Textarea
+              name="content"
+              placeholder="Compartilhe suas ideias com a comunidade SocializeNow..."
+              className="min-h-[100px] border-gray-300 focus:border-mozambique-500 focus:ring-mozambique-500"
+              maxLength={500}
+              required
+            />
+          </div>
+
+          {showImageInput && (
+            <div>
+              <Label htmlFor="imageUrl">URL da Imagem (opcional)</Label>
+              <Input
+                id="imageUrl"
+                name="imageUrl"
+                type="url"
+                placeholder="https://exemplo.com/imagem.jpg"
+                className="border-gray-300 focus:border-mozambique-500 focus:ring-mozambique-500"
               />
-              <Button
-                variant="destructive"
-                size="sm"
-                className="absolute top-2 right-2"
-                onClick={() => {
-                  setImage(null)
-                  if (fileInputRef.current) fileInputRef.current.value = ""
-                }}
-              >
-                Remover
-              </Button>
             </div>
           )}
-          <CardFooter className="flex items-center justify-between p-0 pt-4">
-            <input type="file" ref={fileInputRef} accept="image/*" onChange={handleImageChange} className="hidden" />
+
+          <div className="flex items-center justify-between">
             <Button
               type="button"
               variant="ghost"
-              className="flex items-center gap-2 text-gray-600"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isPending}
+              size="sm"
+              onClick={() => setShowImageInput(!showImageInput)}
+              className="text-mozambique-600 hover:text-mozambique-700"
             >
-              <ImageIcon className="h-5 w-5" />
-              Adicionar Imagem
+              <ImageIcon className="w-4 h-4 mr-2" />
+              {showImageInput ? "Remover Imagem" : "Adicionar Imagem"}
             </Button>
-            <Button type="submit" disabled={isPending}>
-              <Send className="h-4 w-4 mr-2" />
-              {isPending ? "Publicando..." : "Publicar"}
-            </Button>
-          </CardFooter>
+
+            <SubmitButton />
+          </div>
+
+          {state?.error && <p className="text-red-500 text-sm">{state.error}</p>}
+
+          {state?.success && <p className="text-green-500 text-sm">Post publicado com sucesso!</p>}
         </form>
       </CardContent>
     </Card>

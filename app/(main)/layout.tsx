@@ -1,23 +1,11 @@
 import type React from "react"
 import { MainNav } from "@/components/main-nav"
-import { getAuthenticatedUser } from "@/lib/auth"
-import { redirect } from "next/navigation"
 
-export default async function MainLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
-  const user = await getAuthenticatedUser()
-
-  if (!user) {
-    redirect("/login") // Redireciona para o login se não estiver autenticado
-  }
-
+export default function MainLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-screen bg-gray-50">
       <MainNav />
-      <main className="flex-1">{children}</main>
+      <main className="flex-1 container mx-auto py-8 px-4 md:px-6">{children}</main>
     </div>
   )
 }
